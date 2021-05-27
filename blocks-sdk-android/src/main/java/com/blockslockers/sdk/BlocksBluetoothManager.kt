@@ -105,11 +105,13 @@ class BlocksBluetoothManager {
     suspend fun pickupPackage(packageId: String, unlockCode: String, blocksSerialNo: String, handler: ((PickupState) -> Unit)) {
         pickupHandler = handler
 
-        val advertisement = Scanner()
-            .advertisements
-            .first {
-                it.uuids.contains(uuidFrom("aa2fbfff-4f1c-4855-a626-5f4b7bba09a2"))
-            }
+        val advertisement = withTimeout(10000L) {
+            Scanner()
+                .advertisements
+                .first {
+                    it.uuids.contains(uuidFrom("aa2fbfff-4f1c-4855-a626-5f4b7bba09a2"))
+                }
+        }
 
         val peripheral = GlobalScope.peripheral(advertisement)
 

@@ -27,26 +27,39 @@ class BlocksBluetoothManager {
     }
 
     enum class BluetoothError {
-        BLOCKS_MISMATCH,
-        PICKUP_ERROR
+        /// Another operation is already in progress
+        OPERATION_IN_PROGRESS,
+        /// BLE is not ready (no authorization or not powered on)
+        BLE_NOT_READY,
+        /// Blocks not found nearby
+        BLOCKS_NOT_FOUND,
+        /// Blocks found, but connection failed
+        CONNECTION_ERROR,
+        /// Package not found in Blocks
+        PACKAGE_NOT_FOUND,
+        /// Box did not open
+        BOX_NOT_OPENED,
+        /// Internal error
+        INTERNAL_ERROR
     }
 
     sealed class PickupState {
         object Connected : PickupState()
-        object Opened : PickupState()
         object Finished : PickupState()
         class Error(val error: BluetoothError) : PickupState()
     }
 
+    private val jsonCoder = Json { ignoreUnknownKeys = true }
+
     private var pickupHandler: ((PickupState) -> Unit)? = null
 
     private suspend fun readState(peripheral: Peripheral): BlocksState? {
-        try {
+        return try {
             val bytes = peripheral.read(statusCharacteristic)
             val jsonString = String(bytes)
-            return Json { ignoreUnknownKeys = true }.decodeFromString(jsonString)
+            jsonCoder.decodeFromString(jsonString)
         } catch (e: Throwable) {
-            return null
+            null
         }
     }
 
@@ -61,38 +74,35 @@ class BlocksBluetoothManager {
 
         when (state.state) {
             BlocksStateEnum.FINISHED -> {
-                logout(peripheral, null)
+                disconnect(peripheral, null)
             }
             BlocksStateEnum.ERROR -> {
-                logout(peripheral, BluetoothError.PICKUP_ERROR)
-            }
-            BlocksStateEnum.WAITING_FOR_CLOSE -> {
-                if (!isOpened) {
-                    withContext(Dispatchers.Main) {
-                        pickupHandler?.invoke(PickupState.Opened)
+                when (state.error) {
+                    "PACKAGE_NOT_FOUND" -> {
+                        disconnect(peripheral, BluetoothError.PACKAGE_NOT_FOUND)
+                    }
+                    "BOX_NOT_OPENED" -> {
+                        disconnect(peripheral, BluetoothError.BOX_NOT_OPENED)
+                    }
+                    else -> {
+                        disconnect(peripheral, BluetoothError.INTERNAL_ERROR)
                     }
                 }
-                delay(500L)
-                pickupAndCheckState(peripheral, command, true)
             }
             BlocksStateEnum.READY -> {
                 peripheral.write(commandCharacteristic, command.toByteArray(), WriteType.WithResponse)
                 delay(1000L)
                 pickupAndCheckState(peripheral, command, isOpened)
             }
-            BlocksStateEnum.UNKNOWN -> {
+            else -> { // OPENING, UNKNOWN
                 delay(500L)
                 pickupAndCheckState(peripheral, command, isOpened)
             }
         }
     }
 
-    private suspend fun logout(peripheral: Peripheral, error: BluetoothError?) {
-        peripheral.write(commandCharacteristic, "{\"type\":\"logout\"}".toByteArray(), WriteType.WithResponse)
-        // Allow 5 seconds for graceful disconnect before forcefully closing `Peripheral`.
-        withTimeoutOrNull(5_000L) {
-            peripheral.disconnect()
-        }
+    private suspend fun disconnect(peripheral: Peripheral, error: BluetoothError?) {
+        peripheral.disconnect()
         withContext(Dispatchers.Main) {
             if (error != null) {
                 pickupHandler?.invoke(PickupState.Error(error))
@@ -105,50 +115,64 @@ class BlocksBluetoothManager {
     suspend fun pickupPackage(packageId: String, unlockCode: String, blocksSerialNo: String, handler: ((PickupState) -> Unit)) {
         pickupHandler = handler
 
-        val advertisement = withTimeout(10000L) {
-            Scanner()
-                .advertisements
-                .first {
-                    it.uuids.contains(uuidFrom("aa2fbfff-4f1c-4855-a626-5f4b7bba09a2"))
+        try {
+            val advertisement = withTimeout(5000L) {
+                Scanner()
+                    .advertisements
+                    .first {
+                        it.uuids.contains(uuidFrom("aa2fbfff-4f1c-4855-a626-5f4b7bba09a2"))
+                    }
+            }
+
+            val peripheral = GlobalScope.peripheral(advertisement)
+
+            peripheral.connect()
+
+            while (true) {
+                val initState = readState(peripheral)
+
+                if (initState == null) {
+                    delay(100L)
+                    continue
                 }
-        }
 
-        val peripheral = GlobalScope.peripheral(advertisement)
-
-        peripheral.connect()
-
-        while (true) {
-            val initState = readState(peripheral)
-
-            if (initState == null) {
-                delay(100L)
-                continue
-            }
-
-            if (initState.serialNo != blocksSerialNo) {
-                withContext(Dispatchers.Main) {
-                    pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_MISMATCH))
+                if (initState.serialNo != blocksSerialNo) {
+                    withContext(Dispatchers.Main) {
+                        pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_NOT_FOUND))
+                    }
+                    return
                 }
-                return
+
+                if (initState.state != BlocksStateEnum.READY) {
+                    delay(500L)
+                    continue
+                }
+
+                break
             }
 
-            if (initState.state != BlocksStateEnum.READY) {
-                delay(500L)
-                continue
+            withContext(Dispatchers.Main) {
+                pickupHandler?.invoke(PickupState.Connected)
             }
 
-            break
+            delay(1000L)
+
+            val command = "{\"type\":\"pickup\",\"package_id\":\"${packageId}\",\"unlock_code\":\"${unlockCode}\"}"
+
+            pickupAndCheckState(peripheral, command)
+        } catch (e: java.lang.IllegalStateException) {
+            withContext(Dispatchers.Main) {
+                pickupHandler?.invoke(PickupState.Error(BluetoothError.BLE_NOT_READY))
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            withContext(Dispatchers.Main) {
+                pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_NOT_FOUND))
+            }
+        } catch (e: com.juul.kable.ConnectionLostException) {
+            withContext(Dispatchers.Main) {
+                pickupHandler?.invoke(PickupState.Error(BluetoothError.CONNECTION_ERROR))
+            }
         }
-
-        withContext(Dispatchers.Main) {
-            pickupHandler?.invoke(PickupState.Connected)
-        }
-
-        delay(1000L)
-
-        val command = "{\"type\":\"pickup\",\"package_id\":\"${packageId}\",\"unlock_code\":\"${unlockCode}\"}"
-
-        pickupAndCheckState(peripheral, command)
     }
 
 }

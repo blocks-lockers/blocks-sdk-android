@@ -12,7 +12,7 @@ import java.util.*
 enum class BlocksStateEnum {
     @SerialName("unknown") UNKNOWN,
     @SerialName("ready") READY,
-    @SerialName("waiting_for_close") WAITING_FOR_CLOSE,
+    @SerialName("opening") OPENING,
     @SerialName("finished") FINISHED,
     @SerialName("error") ERROR
 }

@@ -26,21 +26,21 @@ class BlocksBluetoothManager {
 
     }
 
-    enum class BluetoothError {
+    sealed class BluetoothError {
         /// Another operation is already in progress
-        OPERATION_IN_PROGRESS,
+        class OPERATION_IN_PROGRESS : BluetoothError()
         /// BLE is not ready (no authorization or not powered on)
-        BLE_NOT_READY,
+        class BLE_NOT_READY(val exception: java.lang.IllegalStateException) : BluetoothError()
         /// Blocks not found nearby
-        BLOCKS_NOT_FOUND,
+        class BLOCKS_NOT_FOUND : BluetoothError()
         /// Blocks found, but connection failed
-        CONNECTION_ERROR,
+        class CONNECTION_ERROR : BluetoothError()
         /// Package not found in Blocks
-        PACKAGE_NOT_FOUND,
+        class PACKAGE_NOT_FOUND : BluetoothError()
         /// Box did not open
-        BOX_NOT_OPENED,
+        class BOX_NOT_OPENED : BluetoothError()
         /// Internal error
-        INTERNAL_ERROR
+        class INTERNAL_ERROR : BluetoothError()
     }
 
     sealed class PickupState {
@@ -79,13 +79,13 @@ class BlocksBluetoothManager {
             BlocksStateEnum.ERROR -> {
                 when (state.error) {
                     "PACKAGE_NOT_FOUND" -> {
-                        disconnect(peripheral, BluetoothError.PACKAGE_NOT_FOUND)
+                        disconnect(peripheral, BluetoothError.PACKAGE_NOT_FOUND())
                     }
                     "BOX_NOT_OPENED" -> {
-                        disconnect(peripheral, BluetoothError.BOX_NOT_OPENED)
+                        disconnect(peripheral, BluetoothError.BOX_NOT_OPENED())
                     }
                     else -> {
-                        disconnect(peripheral, BluetoothError.INTERNAL_ERROR)
+                        disconnect(peripheral, BluetoothError.INTERNAL_ERROR())
                     }
                 }
             }
@@ -138,7 +138,7 @@ class BlocksBluetoothManager {
 
                 if (initState.serialNo != blocksSerialNo) {
                     withContext(Dispatchers.Main) {
-                        pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_NOT_FOUND))
+                        pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_NOT_FOUND()))
                     }
                     return
                 }
@@ -162,15 +162,15 @@ class BlocksBluetoothManager {
             pickupAndCheckState(peripheral, command)
         } catch (e: java.lang.IllegalStateException) {
             withContext(Dispatchers.Main) {
-                pickupHandler?.invoke(PickupState.Error(BluetoothError.BLE_NOT_READY))
+                pickupHandler?.invoke(PickupState.Error(BluetoothError.BLE_NOT_READY(e)))
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             withContext(Dispatchers.Main) {
-                pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_NOT_FOUND))
+                pickupHandler?.invoke(PickupState.Error(BluetoothError.BLOCKS_NOT_FOUND()))
             }
         } catch (e: com.juul.kable.ConnectionLostException) {
             withContext(Dispatchers.Main) {
-                pickupHandler?.invoke(PickupState.Error(BluetoothError.CONNECTION_ERROR))
+                pickupHandler?.invoke(PickupState.Error(BluetoothError.CONNECTION_ERROR()))
             }
         }
     }

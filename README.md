@@ -24,7 +24,7 @@ main build.gradle
 app build.gradle
 
     dependencies {
-        implementation 'com.github.blocks-lockers:blocks-sdk-android:1.0.1'
+        implementation 'com.github.blocks-lockers:blocks-sdk-android:1.0.2'
     }
 
 ## Usage
@@ -34,6 +34,7 @@ Package pick-up via Bluetooth
 import com.blockslockers.sdk.BlocksBluetoothManager
 
 val bluetoothManager = BlocksBluetoothManager()
+bluetoothManager.scanTimeout = 10000L // milliseconds
 
 GlobalScope.launch {
     try {

@@ -53,6 +53,8 @@ class BlocksBluetoothManager {
 
     private var pickupHandler: ((PickupState) -> Unit)? = null
 
+    var scanTimeout: Long = 5000L
+
     private suspend fun readState(peripheral: Peripheral): BlocksState? {
         return try {
             val bytes = peripheral.read(statusCharacteristic)
@@ -116,7 +118,7 @@ class BlocksBluetoothManager {
         pickupHandler = handler
 
         try {
-            val advertisement = withTimeout(5000L) {
+            val advertisement = withTimeout(scanTimeout) {
                 Scanner()
                     .advertisements
                     .first {
